@@ -1,0 +1,265 @@
+---
+title: "rda"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(fastDummies)
+library(cplm)
+library(tweedie)
+library(statmod)
+library(HDtweedie)
+library(TDboost)
+library(glmnet)
+options(warn=-1)
+source("S_U2.R")
+```
+
+```{r}
+load(file="Tweedie_GLM_ALL_data_train.Rda")
+load(file="Tweedie_GLM_ALL_data_test.Rda")
+load(file="AutoCross_Data_train.Rda")
+load(file="AutoCross_Data_test.Rda")
+load(file="Tweedie_GLM_ALL_data_y_train.Rda")
+load(file="Tweedie_GLM_ALL_data_y_test.Rda")
+
+```
+
+
+```{r}
+which(colnames(z0train)=='CAR_USE')
+z_train<-z0train[,-(1:16)]
+z_test<-z0test[,-(1:16)]
+```
+
+```{r}
+final_train<-as.data.frame(z_train)
+final_train$y <- ytrain
+final_test<-as.data.frame(z_test)
+final_test$y <- ytest
+```
+
+```{r}
+fit_0<-glm(y~.^2,data=final_train,family=tweedie(link.power=0,var.power=1.4),control=list(maxit=500))
+```
+
+```{r}
+A_beta
+```
+
+```{r}
+fit_0$coefficients[which(is.na(fit_0$coefficients))]=0
+```
+
+```{r}
+beta_0_t<-c(fit_0$coefficients[1:19])
+```
+
+```{r}
+index=combn(c(1:18),2)
+int_coef<-fit_0$coefficients[-(1:19)]
+r_0_t<-c()
+for (i in 1:length(int_coef)){
+    tmp_coef<-int_coef[i]/(beta_0_t[index[1,i]+1]*beta_0_t[index[2,i]+1])
+    r_0_t<-c(r_0_t,tmp_coef)
+}
+all(r_0_t==0)
+```
+
+```{r}
+X<-model.matrix(~.^2-1,data=final_train[,1:18])
+as=cv.glmnet(x=X,y=final_train$y,family=tweedie(link.power=0,var.power=1.4)
+             ,control=list(maxit=500))
+```
+
+
+
+```{r}
+lambdapath=as$lambda
+r_lamb<-lambdapath
+beta_lamb<-lambdapath
+```
+
+```{r}
+options(warn=-1)
+n_lamb<-length(beta_lamb)
+power=1.4
+final_result1=matrix(nrow=n_lamb,ncol=n_lamb)
+final_result2=matrix(nrow=n_lamb,ncol=n_lamb)
+final_result3=matrix(nrow=n_lamb,ncol=n_lamb)
+for (i in 1:n_lamb){
+    for (j in 1:n_lamb){
+        coef_result<-shim_lasso_update_2(final_train[,1:18],final_train$y,power,lamb_r=r_lamb[i],lamb_b=beta_lamb[j],r_0_t,beta_0_t)
+        fitted<-ts_fitted(final_test[,1:18],coef_result$'beta',coef_result$'r')
+        final_result1[i,j]=mean(tweedie.dev(final_test$y,fitted,1.4))
+        fitted<-ts_fitted(final_train[,1:18],coef_result$'beta',coef_result$'r')
+        den<-dtweedie(final_train$y,mu=fitted,phi=sum(tweedie.dev(final_train$y,fitted,1.4))/length(final_train$y),power=1.4)
+        df<-length(which(r_beta(coef_result$'beta',coef_result$'r')!=0))
+        final_result2[i,j]<--2*sum( log(den))+2*(df)
+        final_result3[i,j]<--2*sum( log(den))+log(length(final_train$y))*(df)
+}
+    }
+```
+
+
+```{r}
+index1<-which(final_result1==min(final_result1,na.rm=T), arr.ind = TRUE)[1,]
+index2<-which(final_result2==min(final_result2,na.rm=T), arr.ind = TRUE)[1,]
+index3<-which(final_result3==min(final_result3,na.rm=T), arr.ind = TRUE)[1,]
+```
+
+```{r}
+index1
+index2
+index3
+min(final_result1,na.rm=T)
+```
+
+```{r}
+coef_result<-shim_lasso_update_2(final_train[,1:18],final_train$y,power,lamb_r=r_lamb[index1[1]],lamb_b=beta_lamb[index1[2]],r_0_t,beta_0_t)
+D_beta<-r_beta(coef_result$beta,coef_result$r)
+coef_result<-shim_lasso_update_2(final_train[,1:18],final_train$y,power,lamb_r=r_lamb[index2[1]],lamb_b=beta_lamb[index2[2]],r_0_t,beta_0_t)
+A_beta<-r_beta(coef_result$beta,coef_result$r)
+coef_result<-shim_lasso_update_2(final_train[,1:18],final_train$y,power,lamb_r=r_lamb[index3[1]],lamb_b=beta_lamb[index3[2]],r_0_t,beta_0_t)
+B_beta<-r_beta(coef_result$beta,coef_result$r)
+```
+
+```{r}
+X<-model.matrix(~.^2,data=final_train[,1:18])
+colnames(X)[which(D_beta!=0)]
+```
+
+```{r}
+dim(X)
+```
+
+```{r}
+X<-model.matrix(~.^2,data=final_train[,1:18])
+colnames(X)[which(A_beta!=0)]
+```
+
+```{r}
+colnames(X)[which(B_beta!=0)]
+
+```
+
+```{r}
+A_fit<-glm(y~GENDER+AREA+NPOLICY+MVR_PTS+GENDER*AREA+GENDER:NPOLICY+GENDER:MVR_PTS+AREA:NPOLICY
+           +NPOLICY:MVR_PTS,data=final_train
+                   ,family=tweedie(link.power=0,var.power=1.4),control=list(maxit=500))
+```
+
+```{r}
+tmp_test<-model.matrix(~~GENDER+AREA+NPOLICY+MVR_PTS+GENDER*AREA+GENDER:NPOLICY+GENDER:MVR_PTS+AREA:NPOLICY+NPOLICY:MVR_PTS,data=final_test)
+pred_A<-exp(tmp_test%*%A_fit$coefficients)
+mean(tweedie.dev(ytest,pred_A,1.4))
+```
+
+
+
+```{r}
+tmp_Xtrain<-X[,which(D_beta!=0)]
+D_fit<-glm(ytrain~tmp_Xtrain-1               ,family=tweedie(link.power=0,var.power=1.4),control=list(maxit=500))
+X_t<-model.matrix(~.^2,data=final_test[,1:18])
+tmp_Xtest<-X_t[,which(D_beta!=0)]
+pred_D<-exp(tmp_Xtest%*%D_fit$coefficients)
+mean(tweedie.dev(ytest,pred_D,1.4))
+```
+
+```{r}
+tmp_Xtrain<-X[,which(A_beta!=0)]
+A_fit<-glm(ytrain~tmp_Xtrain-1               ,family=tweedie(link.power=0,var.power=1.4),control=list(maxit=500))
+X_t<-model.matrix(~.^2,data=final_test[,1:18])
+tmp_Xtest<-X_t[,which(A_beta!=0)]
+pred_A<-exp(tmp_Xtest%*%A_fit$coefficients)
+mean(tweedie.dev(ytest,pred_A,1.4))
+
+```
+```{r}
+tmp_Xtrain<-X[,which(B_beta!=0)]
+B_fit<-glm(ytrain~tmp_Xtrain-1               ,family=tweedie(link.power=0,var.power=1.4),control=list(maxit=500))
+X_t<-model.matrix(~.^2,data=final_test[,1:18])
+tmp_Xtest<-X_t[,which(B_beta!=0)]
+pred_B<-exp(tmp_Xtest%*%B_fit$coefficients)
+mean(tweedie.dev(ytest,pred_B,1.4))
+mean(abs(B_fit$coefficients[1:7]))
+mean(abs(B_fit$coefficients[8:18]))
+length(B_beta[B_beta!=0])
+B_beta[B_beta!=0]
+```
+
+
+
+```{r}
+pred_D_2<-exp(X_t%*%D_beta)
+mean(tweedie.dev(ytest,pred_D_2,1.4))
+```
+
+```{r}
+D_beta[D_beta!=0]
+```
+
+
+```{r}
+pred_A_2<-exp(X_t%*%A_beta)
+mean(tweedie.dev(ytest,pred_A_2,1.4))
+```
+
+```{r}
+pred_B_2<-exp(X_t%*%B_beta)
+mean(tweedie.dev(ytest,pred_B_2,1.4))
+
+```
+
+```{r}
+apply(final_train,2,mean)
+```
+
+```{r}
+which(colnames(z0train)=='CAR_USE')
+z_train<-z0train[,-(1:16)]
+z_test<-z0test[,-(1:16)]
+```
+
+
+```{r}
+final_train<-as.data.frame(z_train)
+final_train$y <- ytrain
+final_test<-as.data.frame(z_test)
+final_test$y <- ytest
+```
+
+```{r}
+colnames(final_train)
+```
+
+```{r}
+library(TDboost)
+TDboost1 <-TDboost(y~CAR_USE+RED_CAR+REVOLKED+GENDER+MARRIED+PARENT1+AREA+KIDSDRIV+TRAVTIME+BLUEBOOK+NPOLICY+MVR_PTS+AGE+HOMEKIDS+YOJ+INCOME+HOME_VAL+SAMEHOME
+                   ,data=final_train,
+                   var.monotone=rep(0,18), distribution=list(name="EDM",alpha=1.4)
+                   , n.trees=3000, shrinkage=0.005, interaction.depth=5, bag.fraction = 0.5, 
+                   train.fraction = 0.75, n.minobsinnode = 10, cv.folds = 5, keep.data=TRUE, verbose=FALSE)
+
+best.iter <-TDboost.perf(TDboost1,method="cv")
+fit_td<-predict(TDboost1,final_train,n.trees=best.iter,type='response')
+mean(tweedie.dev(ytrain,fit_td,1.4))
+```
+
+
+```{r}
+da <- data.frame('y'=ytest,"P1"=pred_A_2,'P2'=pred_A,'P3'=pred_B_2,'P4'=pred_B,'P5'=pred_D_2,'P6'=pred_D,'P7'=pred_lasso[,1],"P8"=pred_gbm,"P9"=pred_base,'base'=rep(1,length(ytest)))
+gg <- gini(loss = "y", score  = paste("P", 1:9,sep = ""),
+           data = da)
+gg
+
+```
+
+```{r}
+plot(gg)
+```
+
